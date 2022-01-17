@@ -10,178 +10,272 @@
  */
 
 #include "ofxPJControl.h"
+
+#include <utility>
 #include "ofMain.h"
 
-ofxPJControl::ofxPJControl()
-{
+ofxPJControl::ofxPJControl(): pjPort(4352), commMode(PJLINK_MODE), shutterState(false) {
 	connected = false;
-	projStatus = false;
+	projectorPowerState = false;
+	commandSendAttempts = 0;
 }
 
-ofxPJControl::~ofxPJControl()
-{
+ofxPJControl::~ofxPJControl() {
+
 }
 
-bool ofxPJControl::getProjectorStatus()
-{
-	return projStatus;
+void ofxPJControl::getErrors() {
+	sendPjLinkCommand("%1ERST ?\r", true);
+
 }
 
-void ofxPJControl::setProjectorType(int protocol)
-{
-	//NEC_MODE or PJLINK_MODE
+void ofxPJControl::updateProjectorPowerStatus() {
+	sendPjLinkCommand("%1POWR ?\r", true);
+}
+
+bool ofxPJControl::getProjectorPower() {
+
+	updateProjectorPowerStatus();
+
+	return projectorPowerState;
+}
+
+void ofxPJControl::updateShutterStatus() {
+	sendPjLinkCommand("%1AVMT ?\r", true);
+}
+
+void ofxPJControl::setProjectorType(int protocol) {
 	commMode = protocol;
 }
 
-void ofxPJControl::setup(string IP_add, int port, int protocol, string password)
-{
-	setProjectorIP(IP_add);
+void ofxPJControl::setup(string ip, int protocol, string password) {
+	setProjectorIP(ip);
 	setProjectorType(protocol);
-	setProjectorPort(port);
 	setProjectorPassword(password);
 }
 
-void ofxPJControl::setProjectorIP(string IP_add)
-{
-	IPAddress = IP_add;
+void ofxPJControl::setup(string ip, int port, int protocol, string password) {
+	setProjectorIP(std::move(ip));
+	setProjectorType(protocol);
+	setProjectorPort(port);
+	setProjectorPassword(std::move(password));
+
 }
 
-void ofxPJControl::setProjectorPort(int port)
-{
+void ofxPJControl::setProjectorIP(string IP_add) {
+	IPAddress = std::move(IP_add);
+}
+
+void ofxPJControl::setProjectorPort(int port) {
 	pjPort = port;
 }
 
-void ofxPJControl::setProjectorPassword(string passwd)
-{
-	password = passwd;
+void ofxPJControl::setProjectorPassword(string passwd) {
+	password = std::move(passwd);
 }
 
 
-bool ofxPJControl::On()
-{
-	if (commMode == NEC_MODE)
-	{
-		return nec_On();
+void ofxPJControl::on() {
+	if (commMode == NEC_MODE) {
+		nec_On();
 	}
-	else if (commMode == PJLINK_MODE)
-	{
-		return pjLink_On();
+	else if (commMode == PJLINK_MODE) {
+		pjLink_On();
 	}
-	else if (commMode == CHRISTIE_MODE)
-	{
-		return christie_On();
+	else if (commMode == CHRISTIE_MODE) {
+		christie_On();
 	}
-	else if (commMode == SANYO_MODE)
-	{
-		return sanyo_On();
+	else if (commMode == SANYO_MODE) {
+		sanyo_On();
 	}
-	else if (commMode == PJDESIGN_MODE)
-	{
-		return pjDesign_On();
+	else if (commMode == BARCO_MODE) {
+		barco_On();
 	}
-	return false;
 }
 
-bool ofxPJControl::Off()
-{
-	if (commMode == NEC_MODE)
-	{
-		return nec_Off();
+void ofxPJControl::off() {
+	if (commMode == NEC_MODE) {
+		nec_Off();
 	}
-	else if (commMode == PJLINK_MODE)
-	{
-		return pjLink_Off();
+	else if (commMode == PJLINK_MODE) {
+		pjLink_Off();
 	}
-	else if (commMode == CHRISTIE_MODE)
-	{
-		return christie_Off();
+	else if (commMode == CHRISTIE_MODE) {
+		christie_Off();
 	}
-	else if (commMode == SANYO_MODE)
-	{
-		return sanyo_Off();
+	else if (commMode == SANYO_MODE) {
+		sanyo_Off();
 	}
-	else if (commMode == PJDESIGN_MODE)
-	{
-		return pjDesign_Off();
+	else if (commMode == BARCO_MODE) {
+		barco_Off();
 	}
-	return false;
 }
 
-bool ofxPJControl::sendPJLinkCommand(string command)
-{
-	string msgRx = "";
+string ofxPJControl::connect() {
+	string msgRx;
+	connected = pjClient.setup(IPAddress, pjPort, true);
+	if (connected) {
+		ofLogNotice() << "connection established: " << IPAddress << ":" << pjPort;
 
-	if (!pjClient.isConnected())
-	{
-		//pjClient.setVerbose(true);
+		while (msgRx.length() < 8) {
+			msgRx = pjClient.receiveRaw();
+		}
+
+		ofLogNotice() << "Received response: " << msgRx;
+
+	}
+	else {
+		ofLogError() << "Failed to connect. Trying again in 1 second..";
+		ofSleepMillis(1000);
+
 		connected = pjClient.setup(IPAddress, pjPort, true);
-		if (connected)
-		{
-			ofLogNotice("", "connection established to %s:%i", IPAddress.c_str(), pjPort);
-			string response = "";
-			while (msgRx.length() < 8)
-			{
-				msgRx = pjClient.receiveRaw();
+		if (connected) {
+
+			ofLogNotice() << "connection established: " << IPAddress << ":" << pjPort;
+		}
+		else
+			ofLog() << "Connection failed again..";
+	}
+
+	return msgRx;
+}
+
+void ofxPJControl::processMessage(const string msgRx) {
+	vector<string> msgRx_splited = ofSplitString(msgRx, "=");
+	if (msgRx_splited.size() > 1) {
+
+		if (msgRx_splited[0] == "%1POWR" || msgRx_splited[0] == "%1powr") {
+
+			if (ofToInt(msgRx_splited[1]) == 1) {
+				projectorPowerState = true;
 			}
-			ofLogNotice("", "received response: %s", msgRx.c_str());
+			else {
+				projectorPowerState = false;
+			}
+
+			if (msgRx_splited[1] == "ERR3") {
+				if (commandSendAttempts < 3) {
+
+					sendPjLinkCommand(command);
+
+				}
+
+			}
+		}
+
+		if (msgRx_splited[0] == "%1AVMT") {
+
+			if (ofToInt(msgRx_splited[1]) == 31) {
+				shutterState = true;
+			}
+			else if (ofToInt(msgRx_splited[1]) == 30) {
+				shutterState = false;
+			}
+			else {
+				ofLogError() << "shutter state is something wrong" << msgRx_splited[1];
+				shutterState = false;
+			}
+
+		}
+
+		if (msgRx_splited[0] == "%1erst" || msgRx_splited[0] == "%1ERST") {
+			auto errorMessage = msgRx_splited[1];
+			auto fanError = errorMessage[0];
+			auto lampError = errorMessage[1];
+			auto temperatureError = errorMessage[2];
+			auto coverOpenEror = errorMessage[3];
+			auto filterError = errorMessage[4];
+			auto otherError = errorMessage[5];
+
+			ofLog() << "Error states: (0: No error, 1: Warning, 2:Error)";
+			ofLog() << "Fan Error: " << fanError;
+			ofLog() << "Lamp Error " << lampError;
+			ofLog() << "Temp error: " << temperatureError;
+			ofLog() << "Cover Open: " << coverOpenEror;
+			ofLog() << "Filter Error: " << filterError;
+			ofLog() << "Other error: " << otherError;
+
+
 		}
 	}
+}
 
-	if (connected)
-	{
-		string authToken = "";
+bool ofxPJControl::sendPjLinkCommand(const string& command, bool waitResponse) {
+	string msgRx;
+	bool commandSent;
+
+	this->command = command;
+
+	if (!pjClient.isConnected()) {
+		msgRx = connect();
+	}
+
+	if (connected) {
+		string authToken;
 
 		//eg. PJLINK 1 604cc14d
-		if (msgRx[7] == '1')
-		{
-			ofLogNotice("", "try with authentication");
+		if (msgRx[7] == '1') {
+			ofLogNotice() << "with authentication";
 			MD5Engine md5;
 			md5.reset();
 			string hash = msgRx.substr(9, 8);
 			ofLogNotice() << hash << endl;
+
 			md5.update(hash + password);
 			authToken = DigestEngine::digestToHex(md5.digest());
 		}
-		ofLogNotice("sending command: %s %s", authToken.c_str(), command.c_str());
+
+		ofLogNotice() << "sending command: " << authToken + command;
 		pjClient.sendRaw(authToken + command);
 		msgRx = "";
-		while (msgRx.length() < 8)
-		{
-			msgRx = pjClient.receiveRaw();
+
+		if (waitResponse) {
+			while (msgRx.length() < 8) {
+				msgRx = pjClient.receiveRaw();
+			}
 		}
-		ofLogNotice("", "received response: %s ", msgRx.c_str());
+
+		ofLogNotice() << "received response: " << msgRx;
 
 		pjClient.close();
-		return true;
+
+		processMessage(msgRx);
+		commandSent = true;
+
+		commandSendAttempts++;
+	}
+	else {
+		commandSent = false;
+		ofLogError() << "still not connected.";
+		pjClient.close();
+
 	}
 
-	ofLogError("", "couldn't connect");
-	pjClient.close();
-	return false;
+
+	return commandSent;
 }
 
-bool ofxPJControl::sendCommand(string command)
-{
-	if (!pjClient.isConnected())
-	{
-		pjClient.setVerbose(true);
-		ofLogNotice() << "connecting to : " << IPAddress << ":" << pjPort << endl;
+void ofxPJControl::sendCommand(string command) {
+	if (!pjClient.isConnected()) {
+		ofLogNotice() << "connecting to : " << IPAddress << ":" << pjPort;
 		connected = pjClient.setup(IPAddress, pjPort, true);
 		ofLogNotice() << "connection state : " << connected;
 	}
-	ofLogNotice() << "sending command : " << command << endl;
-	bool result = pjClient.sendRaw(command);
-	ofLogNotice() << "Response length (Bytes) : " << pjClient.getNumReceivedBytes() << endl;
+	ofLogNotice() << "sending command : " << command;
+	pjClient.sendRaw(command);
+	ofSleepMillis(100);
+	ofLogNotice() << "Response length (Bytes) : " << pjClient.getNumReceivedBytes();
 	msgRx = "";
-	msgRx = pjClient.receiveRaw();
-	ofLogNotice() << "received response : " << msgRx << endl;
+	if (pjClient.getNumReceivedBytes() > 0) {
+		msgRx = pjClient.receiveRaw();
+		ofLogNotice() << "received response : " << msgRx;
+	}
 
 	pjClient.close();
-	return result;
 }
 
-bool ofxPJControl::nec_On()
-{
+void ofxPJControl::nec_On() {
+
 	pjClient.close(); //close any open connections first
 	char* buffer = new char[6]; //02H 00H 00H 00H 00H 02H (the on command in hex)
 	buffer[0] = 2;
@@ -191,15 +285,14 @@ bool ofxPJControl::nec_On()
 	buffer[4] = 0;
 	buffer[5] = 2;
 
-	pjClient.setVerbose(true);
-	if (!pjClient.isConnected())
-	{
+	//pjClient.setVerbose(true);
+	if (!pjClient.isConnected()) {
 		connected = pjClient.setup(IPAddress, NEC_PORT);
-		ofLogNotice() << "connection established: " << IPAddress << ":" << NEC_PORT << endl;
+		ofLogNotice() << "connection established: " << IPAddress << ":" << NEC_PORT;
 	}
-	ofLogNotice() << "sending command: ON" << endl;
+	ofLogNotice() << "sending command: ON";
 
-	bool result = pjClient.sendRawBytes(buffer, 6);
+	pjClient.sendRawBytes(buffer, 6);
 
 	printf("sent: %x %x %x %x %x %x\n", buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5]);
 
@@ -210,15 +303,14 @@ bool ofxPJControl::nec_On()
 	printf("received: %x %x %x %x %x %x\n", rxBuffer[0], rxBuffer[1], rxBuffer[2], rxBuffer[3], rxBuffer[4],
 	       rxBuffer[5]);
 
-	projStatus = true;
+	projectorPowerState = true;
 
-	delete rxBuffer;
-	delete buffer;
-	return result;
+	delete[] rxBuffer;
+	delete[] buffer;
 }
 
-bool ofxPJControl::nec_Off()
-{
+void ofxPJControl::nec_Off() {
+
 	char* buffer = new char[6]; //02H 01H 00H 00H 00H 03H (the off command in hex)
 	buffer[0] = 2;
 	buffer[1] = 1;
@@ -227,19 +319,18 @@ bool ofxPJControl::nec_Off()
 	buffer[4] = 0;
 	buffer[5] = 3;
 
-	projStatus = true;
+	projectorPowerState = true;
 
-	pjClient.setVerbose(true);
+	//pjClient.setVerbose(true);
 
-	if (!pjClient.isConnected())
-	{
+	if (!pjClient.isConnected()) {
 		connected = pjClient.setup(IPAddress, NEC_PORT);
-		ofLogNotice() << "connection established: " << IPAddress << ":" << NEC_PORT << endl;
+		ofLogNotice() << "connection established: " << IPAddress << ":" << NEC_PORT;
 	}
 
-	ofLogNotice() << "sending command: OFF " << endl;
+	ofLogNotice() << "sending command: OFF ";
 
-	bool result = pjClient.sendRawBytes(buffer, 6);
+	pjClient.sendRawBytes(buffer, 6);
 	printf("send: %x %x %x %x %x %x\n", buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5]);
 
 
@@ -250,65 +341,117 @@ bool ofxPJControl::nec_Off()
 	printf("receive: %x %x %x %x %x %x\n", rxBuffer[0], rxBuffer[1], rxBuffer[2], rxBuffer[3], rxBuffer[4],
 	       rxBuffer[5]);
 
-	projStatus = false;
+	projectorPowerState = false;
 
-	delete rxBuffer;
-	delete buffer;
-	return result;
+	delete[] rxBuffer;
+	delete[] buffer;
 }
 
-bool ofxPJControl::pjLink_On()
-{
+void ofxPJControl::pjLink_On() {
 	string command = "%1POWR 1\r";
-	projStatus = sendPJLinkCommand(command);
-	return projStatus;
+	sendPjLinkCommand(command);
+	projectorPowerState = true;
+
+
 }
 
-bool ofxPJControl::pjLink_Off()
-{
+void ofxPJControl::pjLink_Off() {
 	string command = "%1POWR 0\r";
-	projStatus = !sendPJLinkCommand(command);
-	return !projStatus;
+	sendPjLinkCommand(command);
 }
 
-bool ofxPJControl::sanyo_On()
-{
+void ofxPJControl::sanyo_On() {
 	string command = "PWR ON\r";
-	projStatus = sendCommand(command);
-	return projStatus;
+	sendCommand(command);
+	projectorPowerState = true;
 }
 
-bool ofxPJControl::sanyo_Off()
-{
+void ofxPJControl::sanyo_Off() {
 	string command = "PWR OFF\r";
-	projStatus = !sendCommand(command);
-	return !projStatus;
+	sendCommand(command);
+	projectorPowerState = false;
 }
 
-bool ofxPJControl::christie_On()
-{
+void ofxPJControl::christie_On() {
 	string command = "(PWR1)";
-	projStatus = sendCommand(command);
-	return projStatus;
+	sendCommand(command);
+	projectorPowerState = true; //projector on
 }
 
-bool ofxPJControl::christie_Off()
-{
+void ofxPJControl::christie_Off() {
 	string command = "(PWR0)";
-	projStatus = !sendCommand(command);
-	return !projStatus;
+	sendCommand(command);
+	projectorPowerState = false; //projector off
 }
 
-bool ofxPJControl::pjDesign_On()
-{
+void ofxPJControl::barco_On() {
 	string command = ":POWR 1\r";
-	projStatus = sendCommand(command);
-	return projStatus;
+	sendCommand(command);
+	projectorPowerState = true; //projector on
 }
 
-bool ofxPJControl::pjDesign_Off()
-{
+void ofxPJControl::barco_Off() {
 	string command = ":POWR 0\r";
-	projStatus = !sendCommand(command);
-	return !projStatus;
+	sendCommand(command);
+	projectorPowerState = false; //projector off
+}
+
+void ofxPJControl::avMute(bool muteAV) {
+	if (muteAV) {
+		sendPjLinkCommand("%1AVMT 31\r");
+	}
+	else {
+		sendPjLinkCommand("%1AVMT 30\r");
+	}
+	shutterState = muteAV;
+}
+
+void ofxPJControl::christieShutter(bool b) {
+	if (b) {
+		string command = "(SHU 1)";
+		sendCommand(command);
+	}
+	else {
+		string command = "(SHU 0)";
+		sendCommand(command);
+	}
+	shutterState = b;
+}
+
+void ofxPJControl::digitalcomShutter(bool b) {
+	if (b) {
+		string cmd = "*shutter = on\r";
+		sendCommand(cmd);
+	}
+	else {
+		string cmd = "*shutter = off\r";
+		sendCommand(cmd);
+	}
+	shutterState = b;
+}
+
+void ofxPJControl::inputSelect(int input) {
+	string command;
+
+	switch (input) {
+	case SONY_INPUT_A:
+		command = "%1INPT 11\r";
+		break;
+	case SONY_INPUT_B:
+		command = "%1INPT 31\r";
+		break;
+	case SONY_INPUT_C:
+		command = "%1INPT 32\r";
+		break;
+	case SONY_INPUT_D:
+		command = "%1INPT 51\r";
+		break;
+	default:
+		command = "";
+		break;
+	}
+
+	if (!command.empty()) {
+		sendPjLinkCommand(command);
+	}
 }
